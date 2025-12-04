@@ -57,6 +57,11 @@ interface GongListCallsResponse {
   calls: GongCall[];
 }
 
+interface GongExtensiveCallsResponse {
+  calls: GongCall[];
+  cursor?: string;
+}
+
 interface GongRetrieveTranscriptsResponse {
   transcripts: GongTranscript[];
 }
@@ -65,6 +70,14 @@ interface GongListCallsArgs {
   [key: string]: string | undefined;
   fromDateTime?: string;
   toDateTime?: string;
+}
+
+interface GongExtensiveCallsArgs {
+  callIds?: string[];
+  hostedUsers?: string[];
+  fromDateTime?: string;
+  toDateTime?: string;
+  cursor?: string;
 }
 
 interface GongRetrieveTranscriptsArgs {
@@ -133,6 +146,34 @@ class GongClient {
     return this.request<GongListCallsResponse>('GET', '/calls', params);
   }
 
+  async listExtensiveCalls(filters: GongExtensiveCallsArgs): Promise<GongExtensiveCallsResponse> {
+    const filter: Record<string, unknown> = {};
+    
+    if (filters.callIds && filters.callIds.length > 0) {
+      filter.callIds = filters.callIds;
+    }
+    
+    if (filters.hostedUsers && filters.hostedUsers.length > 0) {
+      filter.hostedUsers = filters.hostedUsers;
+    }
+    
+    if (filters.fromDateTime) {
+      filter.fromDateTime = filters.fromDateTime;
+    }
+    
+    if (filters.toDateTime) {
+      filter.toDateTime = filters.toDateTime;
+    }
+
+    const requestBody: Record<string, unknown> = { filter };
+    
+    if (filters.cursor) {
+      requestBody.cursor = filters.cursor;
+    }
+
+    return this.request<GongExtensiveCallsResponse>('POST', '/calls/extensive', undefined, requestBody);
+  }
+
   async retrieveTranscripts(callIds: string[]): Promise<GongRetrieveTranscriptsResponse> {
     return this.request<GongRetrieveTranscriptsResponse>('POST', '/calls/transcript', undefined, {
       filter: {
@@ -161,6 +202,38 @@ const LIST_CALLS_TOOL: Tool = {
       toDateTime: {
         type: "string",
         description: "End date/time in ISO format (e.g. 2024-03-31T23:59:59Z)"
+      }
+    }
+  }
+};
+
+const LIST_EXTENSIVE_CALLS_TOOL: Tool = {
+  name: "list_extensive_calls",
+  description: "List Gong calls with extensive filtering options beyond date ranges. Supports filtering by call IDs, hosted users, date ranges, and pagination. Returns call details and a cursor for pagination if more results are available.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      callIds: {
+        type: "array",
+        items: { type: "string" },
+        description: "Array of specific call IDs to filter by"
+      },
+      hostedUsers: {
+        type: "array",
+        items: { type: "string" },
+        description: "Array of user IDs or email addresses to filter calls by hosted users"
+      },
+      fromDateTime: {
+        type: "string",
+        description: "Start date/time in ISO-8601 format (e.g. 2024-03-01T00:00:00Z)"
+      },
+      toDateTime: {
+        type: "string",
+        description: "End date/time in ISO-8601 format (e.g. 2024-03-31T23:59:59Z)"
+      },
+      cursor: {
+        type: "string",
+        description: "Pagination cursor from previous response to retrieve next page of results"
       }
     }
   }
@@ -205,6 +278,22 @@ function isGongListCallsArgs(args: unknown): args is GongListCallsArgs {
   );
 }
 
+function isGongExtensiveCallsArgs(args: unknown): args is GongExtensiveCallsArgs {
+  if (typeof args !== "object" || args === null) {
+    return false;
+  }
+  
+  const a = args as GongExtensiveCallsArgs;
+  
+  return (
+    (!("callIds" in args) || (Array.isArray(a.callIds) && a.callIds.every(id => typeof id === "string"))) &&
+    (!("hostedUsers" in args) || (Array.isArray(a.hostedUsers) && a.hostedUsers.every(id => typeof id === "string"))) &&
+    (!("fromDateTime" in args) || typeof a.fromDateTime === "string") &&
+    (!("toDateTime" in args) || typeof a.toDateTime === "string") &&
+    (!("cursor" in args) || typeof a.cursor === "string")
+  );
+}
+
 function isGongRetrieveTranscriptsArgs(args: unknown): args is GongRetrieveTranscriptsArgs {
   return (
     typeof args === "object" &&
@@ -217,7 +306,7 @@ function isGongRetrieveTranscriptsArgs(args: unknown): args is GongRetrieveTrans
 
 // Tool handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [LIST_CALLS_TOOL, RETRIEVE_TRANSCRIPTS_TOOL],
+  tools: [LIST_CALLS_TOOL, LIST_EXTENSIVE_CALLS_TOOL, RETRIEVE_TRANSCRIPTS_TOOL],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request: { params: { name: string; arguments?: unknown } }) => {
@@ -235,6 +324,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request: { params: { name
         }
         const { fromDateTime, toDateTime } = args;
         const response = await gongClient.listCalls(fromDateTime, toDateTime);
+        return {
+          content: [{ 
+            type: "text", 
+            text: JSON.stringify(response, null, 2)
+          }],
+          isError: false,
+        };
+      }
+
+      case "list_extensive_calls": {
+        if (!isGongExtensiveCallsArgs(args)) {
+          throw new Error("Invalid arguments for list_extensive_calls");
+        }
+        const response = await gongClient.listExtensiveCalls(args);
         return {
           content: [{ 
             type: "text", 
